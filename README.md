@@ -1,4 +1,4 @@
-# Picsee Uploader
+# PS Uploader
 
 React image uploader with a fully custom UI and headless Uppy integration.
 
@@ -47,6 +47,7 @@ npm run dev
 ```
 
 Notes:
+
 - The worker doesn't work in the dev mode, please build and use preview for testing the entire app.
 
 Build and preview:

@@ -19,7 +19,6 @@ React image uploader with a fully custom UI and headless Uppy integration.
 
 - React 19, TypeScript, Vite
 - `@uppy/core`, `@uppy/transloadit`
-- `@jsquash/resize`, `@jsquash/webp`
 - `@tanstack/react-virtual`
 - CSS Modules
 - Vitest + Testing Library (unit)

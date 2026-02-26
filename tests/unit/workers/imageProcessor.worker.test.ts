@@ -1,15 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 
-vi.mock('@jsquash/resize', () => ({
-  default: vi.fn(),
-  initResize: vi.fn(() => Promise.resolve()),
-}))
-
-vi.mock('@jsquash/webp/encode', () => ({
-  default: vi.fn(),
-  init: vi.fn(() => Promise.resolve()),
-}))
-
 describe('imageProcessor.worker', () => {
   beforeEach(() => {
     vi.resetModules()

@@ -1,5 +1,3 @@
-import resize, { initResize } from '@jsquash/resize'
-import encodeWebp, { init as initWebpEncode } from '@jsquash/webp/encode'
 import type {
   WorkerProcessRequest,
   WorkerProcessResponse,
@@ -16,24 +14,14 @@ const toWebpFileName = (name: string): string => {
   return `${base}.webp`
 }
 
-let codecsReadyPromise: Promise<void> | null = null
-
-const ensureCodecsReady = (): Promise<void> => {
-  if (!codecsReadyPromise) {
-    codecsReadyPromise = Promise.all([initResize(), initWebpEncode()]).then(() => {})
-  }
-  return codecsReadyPromise
-}
-
-const toQualityPercent = (quality: number): number =>
-  Math.max(1, Math.min(100, Math.round(quality * 100)))
+const normalizeQuality = (quality: number): number => Math.max(0.1, Math.min(1, quality))
 
 workerScope.onmessage = async (event: MessageEvent<WorkerProcessRequest>) => {
   const { taskId, arrayBuffer, maxWidth, quality, name, type } = event.data
+  let bitmap: ImageBitmap | null = null
+  let targetCanvas: OffscreenCanvas | null = null
 
   try {
-    await ensureCodecsReady()
-
     if (typeof createImageBitmap !== 'function') {
       throw new Error('createImageBitmap is unavailable in worker environment')
     }
@@ -42,57 +30,46 @@ workerScope.onmessage = async (event: MessageEvent<WorkerProcessRequest>) => {
     }
 
     const sourceBlob = new Blob([arrayBuffer], { type })
-    const bitmap = await createImageBitmap(sourceBlob)
+    bitmap = await createImageBitmap(sourceBlob)
 
     if (bitmap.width <= 0 || bitmap.height <= 0) {
       bitmap.close()
       throw new Error('Invalid source image dimensions')
     }
 
-    const sourceCanvas = new OffscreenCanvas(bitmap.width, bitmap.height)
-    const sourceContext = sourceCanvas.getContext('2d', { alpha: true })
-    if (!sourceContext) {
+    const targetWidth = Math.min(bitmap.width, maxWidth)
+    const targetHeight = Math.max(1, Math.round((bitmap.height * targetWidth) / bitmap.width))
+
+    targetCanvas = new OffscreenCanvas(targetWidth, targetHeight)
+    const targetContext = targetCanvas.getContext('2d', { alpha: true })
+    if (!targetContext) {
       bitmap.close()
       throw new Error('Unable to create offscreen rendering context')
     }
 
-    sourceContext.drawImage(bitmap, 0, 0, bitmap.width, bitmap.height)
+    targetContext.drawImage(bitmap, 0, 0, targetWidth, targetHeight)
     bitmap.close()
+    bitmap = null
 
-    const sourceImageData = sourceContext.getImageData(
-      0,
-      0,
-      sourceCanvas.width,
-      sourceCanvas.height,
-    )
+    if (typeof targetCanvas.convertToBlob !== 'function') {
+      throw new Error('OffscreenCanvas.convertToBlob is unavailable in worker environment')
+    }
 
-    const targetWidth = Math.min(sourceImageData.width, maxWidth)
-    const targetHeight = Math.max(
-      1,
-      Math.round((sourceImageData.height * targetWidth) / sourceImageData.width),
-    )
-
-    const resizedImageData =
-      targetWidth === sourceImageData.width
-        ? sourceImageData
-        : await resize(sourceImageData, {
-            width: targetWidth,
-            height: targetHeight,
-          })
-
-    const webpBuffer = await encodeWebp(resizedImageData, {
-      quality: toQualityPercent(quality),
+    const webpBlob = await targetCanvas.convertToBlob({
+      type: 'image/webp',
+      quality: normalizeQuality(quality),
     })
+    const webpBuffer = await webpBlob.arrayBuffer()
 
     const response: WorkerProcessResponse = {
       taskId,
       ok: true,
       name: toWebpFileName(name),
       type: 'image/webp',
-      width: resizedImageData.width,
-      height: resizedImageData.height,
+      width: targetWidth,
+      height: targetHeight,
       originalSize: sourceBlob.size,
-      processedSize: webpBuffer.byteLength,
+      processedSize: webpBlob.size,
       arrayBuffer: webpBuffer,
     }
 
@@ -107,5 +84,13 @@ workerScope.onmessage = async (event: MessageEvent<WorkerProcessRequest>) => {
           : 'Failed to convert image to WebP in worker',
     }
     workerScope.postMessage(response)
+  } finally {
+    if (bitmap) {
+      bitmap.close()
+    }
+    if (targetCanvas) {
+      targetCanvas.width = 1
+      targetCanvas.height = 1
+    }
   }
 }

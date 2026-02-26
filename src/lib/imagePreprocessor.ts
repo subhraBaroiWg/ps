@@ -124,14 +124,20 @@ export class ImagePreprocessor {
 
   private createWorkerSlot(): WorkerSlot {
     const slot: WorkerSlot = {
-      worker: new Worker(new URL('../workers/imageProcessor.worker.ts', import.meta.url), {
-        type: 'module',
-      }),
+      worker: null as unknown as Worker,
       activeTask: null,
       timeoutId: null,
     }
+    slot.worker = this.createWorkerForSlot(slot)
+    return slot
+  }
 
-    slot.worker.onmessage = (event: MessageEvent<WorkerProcessResponse>) => {
+  private createWorkerForSlot(slot: WorkerSlot): Worker {
+    const worker = new Worker(new URL('../workers/imageProcessor.worker.ts', import.meta.url), {
+      type: 'module',
+    })
+
+    worker.onmessage = (event: MessageEvent<WorkerProcessResponse>) => {
       const response = event.data
       const task = slot.activeTask
       this.clearTaskTimeout(slot)
@@ -144,6 +150,7 @@ export class ImagePreprocessor {
 
       if (!response.ok) {
         task.reject(new Error(response.error))
+        this.recycleWorker(slot)
         this.processQueue()
         return
       }
@@ -160,21 +167,22 @@ export class ImagePreprocessor {
         originalSize: response.originalSize,
         processedSize: response.processedSize,
       })
+      this.recycleWorker(slot)
       this.processQueue()
     }
 
-    slot.worker.onerror = (event) => {
+    worker.onerror = (event) => {
       this.failActiveTaskAndReplaceWorker(
         slot,
         event.message || 'Worker failed while processing image',
       )
     }
 
-    slot.worker.onmessageerror = () => {
+    worker.onmessageerror = () => {
       this.failActiveTaskAndReplaceWorker(slot, 'Worker message transfer failed')
     }
 
-    return slot
+    return worker
   }
 
   private startTaskInSlot(slot: WorkerSlot, task: WorkerTask): void {
@@ -239,10 +247,19 @@ export class ImagePreprocessor {
   private replaceWorker(slot: WorkerSlot): void {
     this.clearTaskTimeout(slot)
     slot.worker.terminate()
-    const replacement = this.createWorkerSlot()
-    slot.worker = replacement.worker
+    if (this.isTerminated) {
+      slot.activeTask = null
+      slot.timeoutId = null
+      return
+    }
+    slot.worker = this.createWorkerForSlot(slot)
     slot.activeTask = null
     slot.timeoutId = null
+  }
+
+  private recycleWorker(slot: WorkerSlot): void {
+    // Recreate worker after each completed task to release WASM/canvas memory aggressively.
+    this.replaceWorker(slot)
   }
 
 }
